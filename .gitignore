@@ -1,0 +1,9 @@
+.venv/*
+result
+sync_batchnorm
+test - Copy.py
+__pycache__
+data
+data/train_pairs.txt
+data/test_pairs.txt
+tensorboard
