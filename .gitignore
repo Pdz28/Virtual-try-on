@@ -1,0 +1,6 @@
+.venv/
+result
+__pycache__
+data/train_pairs.txt
+tensorboard
+checkpoints
