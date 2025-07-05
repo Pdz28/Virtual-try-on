@@ -7,12 +7,182 @@ import argparse
 import os
 import time
 import glob
+import shutil
+import cv2
+import numpy as np
 from cp_dataset import CPDataset, CPDataLoader
 from networks import GMM, UnetGenerator, load_checkpoint
 from gen_data import process_and_prepare_data
 
 from tensorboardX import SummaryWriter
 from visualization import board_add_image, board_add_images, save_images
+
+
+def upscale_with_opencv(image_path, output_path="upscaled_opencv.jpg"):
+    """Upscale với OpenCV (thuật toán khác)"""
+    
+    try:
+        print("🔬 Upscale với OpenCV...")
+        
+        # Đọc ảnh với OpenCV
+        img = cv2.imread(image_path)
+        if img is None:
+            print("❌ Không thể đọc ảnh với OpenCV")
+            return None
+        
+        height, width = img.shape[:2]
+        print(f"📐 Kích thước gốc: {width}x{height}")
+        
+        # Tính tỷ lệ scale
+        target_width = 1920
+        target_height = 1080
+        
+        scale_x = target_width / width
+        scale_y = target_height / height
+        scale = min(scale_x, scale_y)
+        
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+        
+        print(f"📏 Scale: {scale:.2f}x -> {new_width}x{new_height}")
+        
+        # Upscale với INTER_CUBIC (chất lượng cao)
+        img_resized = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+        
+        # Tạo canvas 1920x1080
+        canvas = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+        
+        # Center ảnh
+        x = (target_width - new_width) // 2
+        y = (target_height - new_height) // 2
+        
+        canvas[y:y+new_height, x:x+new_width] = img_resized
+        
+        # Áp dụng sharpening filter
+        kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+        canvas = cv2.filter2D(canvas, -1, kernel)
+        
+        # Lưu ảnh
+        cv2.imwrite(output_path, canvas, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        print(f"✅ OpenCV upscale đã lưu: {output_path}")
+        
+        return output_path
+        
+    except Exception as e:
+        print(f"❌ Lỗi OpenCV: {e}")
+        return None
+
+
+def upscale_try_on_results(try_on_dir, upscale_dir="upscaled_results"):
+    """Upscale tất cả ảnh try-on results lên 1920x1080"""
+    
+    if not os.path.exists(try_on_dir):
+        print(f"❌ Thư mục try-on không tồn tại: {try_on_dir}")
+        return
+    
+    # Tạo thư mục upscale
+    if not os.path.exists(upscale_dir):
+        os.makedirs(upscale_dir)
+    
+    print(f"\n🚀 Bắt đầu upscale tất cả ảnh từ {try_on_dir}...")
+    
+    # Lấy tất cả file ảnh
+    image_files = []
+    for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+        image_files.extend(glob.glob(os.path.join(try_on_dir, ext)))
+    
+    if not image_files:
+        print("❌ Không tìm thấy ảnh nào để upscale")
+        return
+    
+    print(f"📁 Tìm thấy {len(image_files)} ảnh để upscale")
+    
+    successful_upscales = 0
+    
+    for i, image_path in enumerate(image_files):
+        print(f"\n📸 Đang xử lý ({i+1}/{len(image_files)}): {os.path.basename(image_path)}")
+        
+        # Tên file output
+        filename = os.path.basename(image_path)
+        name, ext = os.path.splitext(filename)
+        output_path = os.path.join(upscale_dir, f"{name}_1080p{ext}")
+        
+        # Upscale
+        result = upscale_with_opencv(image_path, output_path)
+        
+        if result:
+            successful_upscales += 1
+            file_size = os.path.getsize(result) / (1024 * 1024)  # MB
+            print(f"✅ Hoàn thành: {os.path.basename(result)} ({file_size:.1f} MB)")
+        else:
+            print(f"❌ Thất bại: {filename}")
+    
+    print(f"\n🎉 HOÀN THÀNH UPSCALE!")
+    print(f"✅ Thành công: {successful_upscales}/{len(image_files)} ảnh")
+    print(f"📁 Kết quả được lưu trong: {upscale_dir}")
+
+
+def cleanup_directories():
+    """
+    Dọn dẹp các thư mục sau khi tạo kết quả:
+    - Xóa tất cả thư mục trong result/ trừ try_on/
+    - Xóa tất cả nội dung trong data/test/
+    """
+    
+    # Đường dẫn gốc
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    result_path = os.path.join(base_path, 'result')
+    data_test_path = os.path.join(base_path, 'data', 'test')
+    
+    print("🧹 Bắt đầu dọn dẹp thư mục...")
+    
+    # 1. Dọn dẹp thư mục result (giữ lại try_on)
+    if os.path.exists(result_path):
+        print(f"📁 Dọn dẹp thư mục: {result_path}")
+        
+        for item in os.listdir(result_path):
+            item_path = os.path.join(result_path, item)
+            
+            # Bỏ qua thư mục try_on
+            if item == 'try_on':
+                print(f"Giữ lại: {item}")
+                continue
+            
+            # Xóa các thư mục/file khác
+            if os.path.isdir(item_path):
+                try:
+                    shutil.rmtree(item_path)
+                    print(f"Đã xóa thư mục: {item}")
+                except Exception as e:
+                    print(f"Lỗi khi xóa {item}: {e}")
+            elif os.path.isfile(item_path):
+                try:
+                    os.remove(item_path)
+                    print(f"Đã xóa file: {item}")
+                except Exception as e:
+                    print(f"Lỗi khi xóa {item}: {e}")
+    
+    # 2. Dọn dẹp thư mục data/test
+    if os.path.exists(data_test_path):
+        print(f"📁 Dọn dẹp thư mục: {data_test_path}")
+        
+        for item in os.listdir(data_test_path):
+            item_path = os.path.join(data_test_path, item)
+            
+            if os.path.isdir(item_path):
+                try:
+                    shutil.rmtree(item_path)
+                    print(f"Đã xóa thư mục: {item}")
+                except Exception as e:
+                    print(f"Lỗi khi xóa {item}: {e}")
+            elif os.path.isfile(item_path):
+                try:
+                    os.remove(item_path)
+                    print(f"Đã xóa file: {item}")
+                except Exception as e:
+                    print(f"Lỗi khi xóa {item}: {e}")
+    
+    print("Hoàn thành dọn dẹp!")
 
 
 def get_opt():
@@ -214,14 +384,16 @@ def main():
     # Nếu cần, tạo dữ liệu trước khi chạy    
     if opt.gen_data:
         print("Generating data before testing...")
-    try:
-        process_and_prepare_data(opt.source_dir, opt.output_dir)
-        print("Data generation completed.")
-    except Exception as e:
-        print(f"Lỗi khi tạo dữ liệu: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        try:
+            process_and_prepare_data(opt.source_dir, opt.output_dir)
+            print("Data generation completed.")
+        except Exception as e:
+            print(f"Lỗi khi tạo dữ liệu: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
+    tom_output_dir = None
+    
     # Chạy GMM
     if opt.stage == 'GMM' or opt.stage == 'BOTH':
         print("=== Đang khởi tạo giai đoạn GMM ===")
@@ -277,6 +449,23 @@ def main():
         board_tom.close()
     
     print('\nQuá trình xử lý đã hoàn tất!')
+    
+    # Upscale tự động sau khi hoàn thành TOM
+    if tom_output_dir:
+        print('\n🚀 Bắt đầu upscale kết quả lên 1920x1080...')
+        try:
+            upscale_dir = "upscaled_results"
+            upscale_try_on_results(tom_output_dir, upscale_dir)
+            print(f'✅ Hoàn thành upscale! Kết quả được lưu trong: {upscale_dir}')
+        except Exception as e:
+            print(f'❌ Lỗi khi upscale: {e}')
+    
+    # Dọn dẹp tự động sau khi hoàn thành
+    try:
+        print('\n🧹 Đang dọn dẹp thư mục...')
+        cleanup_directories()
+    except Exception as e:
+        print(f'\n❌ Lỗi khi dọn dẹp: {e}')
 
 
 if __name__ == "__main__":
